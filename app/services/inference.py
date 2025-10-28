@@ -1,73 +1,69 @@
-from __future__ import annotations
+# app/services/inference.py
 
-from typing import Any, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 
-class InferenceService:
+MODEL_NAME = "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-0.5B"
+
+# 1) 모델/토크나이저 로딩 (앱 시작 시 1번만 실행되도록 모듈 전역에 둔다)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME,
+    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+    device_map="auto",  # GPU 있으면 GPU에, 없으면 CPU에
+)
+
+SYSTEM_PROMPT = (
+    "You are a supportive Korean reflection assistant. "
+    "Read the user's diary entry, understand their feelings, "
+    "and reply in natural Korean with empathy. "
+    "Do not diagnose like a doctor. Be kind and short."
+)
+
+def build_diary_instruction(diary_text: str) -> str:
     """
-    파인튜닝된 HyperCLOVAX 모델을 호스팅하는 실제 추론 서비스.
+    일기 코멘트 전용 프롬프트. (서비스 value: 감정 피드백/코멘트)
     """
+    return (
+        "다음은 사용자의 오늘 일기야.\n"
+        "1) 먼저 공감해줘.\n"
+        "2) 사용자의 현재 감정을 한 줄로 요약해줘.\n"
+        "3) 내일을 위한 부드러운 제안을 한 줄로 해줘.\n\n"
+        f"[일기]\n{diary_text}\n"
+        "---\n"
+        "위 가이드만 지키고 한국어로 답해."
+    )
 
-    def __init__(self, model_version: str = "hyperclovax-seed-0.5b-diary-v1") -> None:
-        self.model_version = model_version
-        
-        # TODO: 실제 저장된 모델 경로로 변경
-        comment_model_path = "./models/model_comment"
-        emotion_model_path = "./models/model_emotion"
-        
-        # 공통 토크나이저 로드 (베이스 모델)
-        base_model_name = "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-0.5B"
-        self.tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+def _generate(prompt: str, max_new_tokens: int = 256) -> str:
+    """
+    공통 생성 함수
+    """
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
-        # 1. 코멘트 생성 모델 로드
-        self.comment_model = AutoModelForCausalLM.from_pretrained(comment_model_path)
-        self.comment_model.to("cuda" if torch.cuda.is_available() else "cpu")
-        self.comment_model.eval()
+    with torch.inference_mode():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            temperature=0.7,
+            top_p=0.9,
+            repetition_penalty=1.2,  # 반복 줄이기
+            do_sample=True,
+            pad_token_id=tokenizer.eos_token_id,
+        )
 
-        # 2. 감정 분석 모델 로드
-        self.emotion_model = AutoModelForCausalLM.from_pretrained(emotion_model_path)
-        self.emotion_model.to("cuda" if torch.cuda.is_available() else "cpu")
-        self.emotion_model.eval()
+    decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    # 우리가 넣은 프롬프트가 앞부분에 그대로 섞여서 나올 수 있으니까 간단하게 잘라줌
+    cleaned = decoded.replace(prompt, "").strip()
+    return cleaned
 
-    def generate_response(self, text: str, metadata: Optional[dict[str, Any]] = None) -> str:
-        """
-        metadata의 'task' 필드를 기반으로 적절한 모델을 호출합니다.
-        """
-        if metadata is None:
-            metadata = {}
-            
-        # metadata에서 'task'를 가져옵니다. 기본값은 'comment'로 설정.
-        task_type = metadata.get("task", "comment")
+def generate_comment_for_diary(diary_text: str) -> str:
+    """
+    외부에서 실제로 쓰는 함수.
+    백엔드 엔드포인트에서 이 함수만 호출하면 됨.
+    """
+    user_instruction = build_diary_instruction(diary_text)
 
-        try:
-            if task_type == "comment":
-                # 1. 코멘트 생성 태스크
-                prompt = f"instruction: 다음 일기를 읽고 따뜻한 코멘트를 작성해줘.\ninput: {text}\noutput:"
-                model_to_use = self.comment_model
-            
-            elif task_type == "emotion":
-                # 2. 감정 분석 태스크
-                prompt = f"instruction: 다음 일기에서 느껴지는 주된 감정을 한 단어로 분류해줘.\ninput: {text}\noutput:"
-                model_to_use = self.emotion_model
-                
-            else:
-                return f"Error: Unknown task type '{task_type}'"
+    full_prompt = f"<s>[INST] {SYSTEM_PROMPT}\n{user_instruction} [/INST]"
 
-            # 모델 추론 실행 (토크나이징 및 생성)
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(model_to_use.device)
-            
-            # TODO: max_new_tokens, do_sample, temperature 등 생성 옵션 조정 필요
-            outputs = model_to_use.generate(**inputs, max_new_tokens=100) 
-            
-            # 프롬프트를 제외한 실제 생성된 텍스트만 디코딩
-            generated_text = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
-            return generated_text.strip()
-
-        except Exception as e:
-            # 실제 운영 시에는 로깅(logging) 필요
-            print(f"Error during inference: {e}")
-            raise  # 예외를 다시 발생시켜 API 응답(500)으로 처리되도록 함
-
-
-inference_service = InferenceService()
+    return _generate(full_prompt)
