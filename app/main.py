@@ -1,14 +1,30 @@
+# app/main.py
+
 from fastapi import FastAPI
+from pydantic import BaseModel
+from .services.inference import generate_comment_for_diary
 
-from app.api.v1.endpoints import router as v1_router
-from app.core.config import settings
+app = FastAPI(
+    title="DiaryGarden AI Service",
+    version="0.1.0",
+)
 
-app = FastAPI(title=settings.project_name, version=settings.api_version, debug=settings.debug)
+class InferenceRequest(BaseModel):
+    text: str        # 사용자의 일기
+    metadata: dict | None = None  # 선택. 나중에 mood, userId 등 넣을 수 있음
 
+class InferenceResponse(BaseModel):
+    comment: str     # AI가 생성한 코멘트
 
-@app.get("/health", tags=["health"])
-async def health_check() -> dict[str, str]:
-    return {"status": "ok", "version": settings.api_version}
+@app.get("/health")
+def health():
+    return {"status": "ok", "model": "HyperCLOVAX-SEED-Text-Instruct-0.5B"}
 
+@app.post("/api/v1/inference", response_model=InferenceResponse)
+def run_inference(req: InferenceRequest):
+    diary_text = req.text
 
-app.include_router(v1_router, prefix="/api/v1")
+    # 일기 코멘트 생성
+    ai_comment = generate_comment_for_diary(diary_text)
+
+    return InferenceResponse(comment=ai_comment)
