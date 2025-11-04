@@ -1,14 +1,20 @@
+# main.py 골격 필요 시 생성
+
 from fastapi import FastAPI
+from pydantic import BaseModel
+from app.services.inference import CommentGenerator
 
-from app.api.v1.endpoints import router as v1_router
-from app.core.config import settings
+app = FastAPI()
 
-app = FastAPI(title=settings.project_name, version=settings.api_version, debug=settings.debug)
+class InferenceRequest(BaseModel):
+    text: str
+    metadata: dict | None = None
 
+@app.get("/health")
+def health():
+    return {"ok": True}
 
-@app.get("/health", tags=["health"])
-async def health_check() -> dict[str, str]:
-    return {"status": "ok", "version": settings.api_version}
-
-
-app.include_router(v1_router, prefix="/api/v1")
+@app.post("/api/v1/inference")
+async def inference(req: InferenceRequest):
+    comment = await CommentGenerator.generate_comment(req.text, req.metadata)
+    return {"comment": comment}
