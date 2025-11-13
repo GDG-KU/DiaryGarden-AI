@@ -5,6 +5,41 @@ from typing import Optional, Dict, Any, List
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import re
+
+STOP_STRINGS = ["<|endofturn|>", "<|stop|>", "<|im_end|>"]
+
+def _strip_after_stop(text: str) -> str:
+    for s in STOP_STRINGS:
+        if s and s in text:
+            text = text.split(s)[0]
+    return text
+
+def _clean_text(t: str) -> str:
+    t = t.replace("\u200b", "")
+    # AI 자기언급/면책 문구 제거(영/한 케이스)
+    t = re.sub(r"저는\s*AI[^.?!\n]*[.?!]?", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"I am an AI[^.?!\n]*[.?!]?", "", t, flags=re.IGNORECASE)
+    # 따옴표/별 등 제거
+    t = t.replace("*", "")
+    t = re.sub(r"[\"“”‘’]+", "", t)
+    # 공백 정리
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+def _to_one_sentence(t: str) -> str:
+    # 개행 제거 후 문장 분리 → 첫 문장만
+    t = t.replace("\r", " ").replace("\n", " ")
+    # 문장 경계: ., !, ?, 또는 한국어 종결(다., 요.)
+    sents = re.split(r"(?:(?<=[\.!?])\s+|(?<=다\.)\s+|(?<=요\.)\s+)", t)
+    for s in sents:
+        s = s.strip(" '\"`")
+        if s:
+            # 끝에 마침표가 없으면 하나만 붙이기
+            if not re.search(r"[\.!?]$", s):
+                s += "."
+            return s
+    return t if t.endswith(".") else (t + ".")
 
 # .env 에서 바꿀 수 있음
 HF_MODEL_ID = os.getenv(
@@ -15,13 +50,18 @@ HF_MODEL_ID = os.getenv(
 USE_LORA_ADAPTER_ID = os.getenv("USE_LORA_ADAPTER_ID", "").strip()
 
 # CPU면 토큰 수를 너무 크게 잡지 말자 (속도 ↑)
+
+
 GEN_KW = dict(
-    max_new_tokens=40,      # 느리면 80~120으로 낮추기
-    temperature=0.8,
-    top_p=0.9,
+    max_new_tokens=70,
+    do_sample=True,
+    temperature=1.5,
+    top_p=0.85,
     repetition_penalty=1.2,
-    do_sample=False,          
+    no_repeat_ngram_size=4,
 )
+
+
 STOP_STRINGS = ["<|endofturn|>", "<|stop|>"]   # 모델 템플릿 기준 종료 토큰 후보
 
 class _Holder:
@@ -79,16 +119,23 @@ def _build_chat(user_text: str) -> list[dict[str, str]]:
     return [
         {"role": "tool_list", "content": ""},
         {"role": "system", "content": (
-            "역할: 한국어 공감 코멘트 생성기.\n"
+            "역할: 따뜻하게 위로하는 친구처럼 한국어 코멘트를 쓰는 작가.\n"
             "규칙:\n"
-            "1) 2~3문장으로 공감 요약 후, 1문장으로 작은 제안을 덧붙여라.\n"
-            "2) 이모지·해시태그·인용부호·출처 표시 금지.\n"
-            "3) 존대하지만 가볍고 따뜻한 톤.\n"
-            "4) 사용자가 말하지 않은 사실은 추정하지 말 것.\n"
+            "1) 반드시 개행 없이 한 문장으로만 작성한다.\n"
+            "2) 한글 기준 45~60자로 자연스럽게 맞춘다.\n"
+            "3) 문장 끝은 마침표 하나로 끝내며, ?, !, 따옴표, 이모지, 해시태그 금지.\n"
+            "4) AI, 언어모델, 시스템 등 자기 언급 금지.\n"
+            "5) 입력 내용의 핵심 감정을 반드시 반영해 공감한다.\n"
+            "6) 조언은 강요가 아닌 부드러운 제안 형태로 표현한다.\n"
+            "6) 자기 자신이 아닌 일기의 본인인 타인에 대한 코멘트를 말해야 한다.\n"
+
+            "출력 예시:\n"
+            "- 너 즐거운 하루였구나, 그 기분 오래 유지되도록 스스로를 칭찬해줘.\n"
+            "- 너 오늘 많이 힘들었겠다, 잠시 쉬며 마음을 가볍게 만들어보자.\n"
+            "- 너 정말 억울했을 것 같아, 네 감정을 인정하고 천천히 정리해보자.\n"
         )},
         {"role": "user", "content": user_text},
     ]
-
 
 
 def _strip_after_stop(text: str) -> str:
@@ -115,9 +162,9 @@ class CommentGenerator:
 
         with torch.no_grad():
             out = model.generate(**inputs, **GEN_KW)
-
-        decoded = tok.batch_decode(out, skip_special_tokens=False)[0]
-        # 보통 템플릿에 assistant 마커가 섞임 → 이후만 취함
-        if "<|im_start|>assistant" in decoded:
-            decoded = decoded.split("<|im_start|>assistant")[-1]
-        return _strip_after_stop(decoded).strip()
+            decoded = tok.batch_decode(out, skip_special_tokens=False)[0]
+            if "<|im_start|>assistant" in decoded:
+                decoded = decoded.split("<|im_start|>assistant")[-1]
+            decoded = _clean_text(_strip_after_stop(decoded))
+            decoded = _to_one_sentence(decoded)   # ← 최종 한 문장 강제
+            return decoded
