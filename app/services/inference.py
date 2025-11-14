@@ -17,10 +17,8 @@ def _strip_after_stop(text: str) -> str:
 
 def _clean_text(t: str) -> str:
     t = t.replace("\u200b", "")
-    # AI 자기언급/면책 문구 제거(영/한 케이스)
     t = re.sub(r"저는\s*AI[^.?!\n]*[.?!]?", "", t, flags=re.IGNORECASE)
     t = re.sub(r"I am an AI[^.?!\n]*[.?!]?", "", t, flags=re.IGNORECASE)
-    # 따옴표/별 등 제거
     t = t.replace("*", "")
     t = re.sub(r"[\"“”‘’]+", "", t)
     # 공백 정리
@@ -28,14 +26,11 @@ def _clean_text(t: str) -> str:
     return t
 
 def _to_one_sentence(t: str) -> str:
-    # 개행 제거 후 문장 분리 → 첫 문장만
     t = t.replace("\r", " ").replace("\n", " ")
-    # 문장 경계: ., !, ?, 또는 한국어 종결(다., 요.)
     sents = re.split(r"(?:(?<=[\.!?])\s+|(?<=다\.)\s+|(?<=요\.)\s+)", t)
     for s in sents:
         s = s.strip(" '\"`")
         if s:
-            # 끝에 마침표가 없으면 하나만 붙이기
             if not re.search(r"[\.!?]$", s):
                 s += "."
             return s
