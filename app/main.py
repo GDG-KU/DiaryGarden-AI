@@ -1,4 +1,4 @@
-
+from app.services.inference import router as inference_router
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -38,3 +38,4 @@ async def inference(req: InferenceRequest):
         content=InferenceResponse(comment=comment).model_dump(),
         media_type="application/json; charset=utf-8",
     )
+app.include_router(inference_router, prefix="/api/v1")
