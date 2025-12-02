@@ -40,5 +40,5 @@ async def inference(req: InferenceRequest):
     
     return JSONResponse(
         content=result,
-        media_type="application/json; charset=utf-8",
+        media_type="application/json; charset=utf-8"
     )
