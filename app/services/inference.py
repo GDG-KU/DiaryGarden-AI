@@ -4,64 +4,44 @@ import os
 from typing import Optional, Dict, Any, List
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import re
+import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForSequenceClassification
 
-STOP_STRINGS = ["<|endofturn|>", "<|stop|>", "<|im_end|>"]
+# ----------------------------------------------------------------
+# 1. 설정 및 상수
+# ----------------------------------------------------------------
+# LLM 모델 (댓글 생성용)
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-0.5B").strip()
 
-def _strip_after_stop(text: str) -> str:
-    for s in STOP_STRINGS:
-        if s and s in text:
-            text = text.split(s)[0]
-    return text
+# 감정 분석 모델 경로 (학습된 모델이 있는 경로)
+EMOTION_MODEL_PATH = "./emotion-model"
 
-def _clean_text(t: str) -> str:
-    t = t.replace("\u200b", "")
-    t = re.sub(r"저는\s*AI[^.?!\n]*[.?!]?", "", t, flags=re.IGNORECASE)
-    t = re.sub(r"I am an AI[^.?!\n]*[.?!]?", "", t, flags=re.IGNORECASE)
-    t = t.replace("*", "")
-    t = re.sub(r"[\"“”‘’]+", "", t)
-    # 공백 정리
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-def _to_one_sentence(t: str) -> str:
-    t = t.replace("\r", " ").replace("\n", " ")
-    sents = re.split(r"(?:(?<=[\.!?])\s+|(?<=다\.)\s+|(?<=요\.)\s+)", t)
-    for s in sents:
-        s = s.strip(" '\"`")
-        if s:
-            if not re.search(r"[\.!?]$", s):
-                s += "."
-            return s
-    return t if t.endswith(".") else (t + ".")
-
-# .env 에서 바꿀 수 있음
-HF_MODEL_ID = os.getenv(
-    "HF_MODEL_ID",
-    "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-0.5B",
-).strip()
-# (선택) LoRA 어댑터 쓰면 여기 모델 repo/id 넣어두기
-USE_LORA_ADAPTER_ID = os.getenv("USE_LORA_ADAPTER_ID", "").strip()
-
-# CPU면 토큰 수를 너무 크게 잡지 말자 (속도 ↑)
-
+# 감정 라벨 (train.py와 동일해야 함)
+ID2LABEL = {0: "joy", 1: "sadness", 2: "anger", 3: "neutral"}
 
 GEN_KW = dict(
-    max_new_tokens=70,
+    max_new_tokens=100,
     do_sample=True,
-    temperature=1.5,
-    top_p=0.85,
+    temperature=0.7,
+    top_p=0.9,
     repetition_penalty=1.2,
     no_repeat_ngram_size=4,
 )
 
+STOP_STRINGS = ["<|endofturn|>", "<|stop|>", "<|im_end|>"]
 
-STOP_STRINGS = ["<|endofturn|>", "<|stop|>"]   # 모델 템플릿 기준 종료 토큰 후보
-
+# ----------------------------------------------------------------
+# 2. 모델 홀더 (LLM + Emotion Model 로드)
+# ----------------------------------------------------------------
 class _Holder:
-    tok = None
-    model = None
+    # LLM
+    llm_tok = None
+    llm_model = None
+    
+    # Emotion Model
+    emo_tok = None
+    emo_model = None
+
     device = (
         "cuda" if torch.cuda.is_available()
         else ("mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
@@ -70,96 +50,105 @@ class _Holder:
 
     @classmethod
     def load(cls):
-     if cls.model is not None:
-        return
+        # 이미 로드되었으면 패스
+        if cls.llm_model is not None and cls.emo_model is not None:
+            return
 
-    # CPU 최적화(스레드 수 조정)
-     if cls.device == "cpu":
-        try:
-            torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
-        except Exception:
-            pass
+        print(f"Loading models on {cls.device}...")
 
-    # 토크나이저
-     cls.tok = AutoTokenizer.from_pretrained(HF_MODEL_ID, use_fast=True)
+        # (A) LLM 로드
+        if cls.llm_model is None:
+            cls.llm_tok = AutoTokenizer.from_pretrained(HF_MODEL_ID, use_fast=True)
+            if cls.device == "cpu":
+                cls.llm_model = AutoModelForCausalLM.from_pretrained(
+                    HF_MODEL_ID, device_map={"": "cpu"}, torch_dtype=torch.float32, low_cpu_mem_usage=True
+                )
+            else:
+                cls.llm_model = AutoModelForCausalLM.from_pretrained(
+                    HF_MODEL_ID, device_map="auto", torch_dtype=torch.float16, low_cpu_mem_usage=True
+                )
 
-     if cls.device == "cpu":
-        # ✅ CPU에서는 device_map을 'cpu'로 고정하고 dtype은 float32로
-        cls.model = AutoModelForCausalLM.from_pretrained(
-            HF_MODEL_ID,
-            device_map={"": "cpu"},
-            dtype=torch.float32,
+        # (B) 감정 분석 모델 로드
+        if cls.emo_model is None:
+            # 학습된 모델이 없으면 기본 모델 로드 (에러 방지용)
+            path = EMOTION_MODEL_PATH if os.path.exists(EMOTION_MODEL_PATH) else "monologg/koelectra-base-v3-discriminator"
+            cls.emo_tok = AutoTokenizer.from_pretrained(path)
+            cls.emo_model = AutoModelForSequenceClassification.from_pretrained(path)
+            cls.emo_model.to(cls.device)
+            cls.emo_model.eval()
 
-            low_cpu_mem_usage=True,
-        )
-     else:
-        # GPU/MPS일 때만 bfloat16 등 사용
-        dtype = torch.bfloat16 if cls.device == "cuda" else None
-        cls.model = AutoModelForCausalLM.from_pretrained(
-            HF_MODEL_ID,
-            device_map="auto",
-            torch_dtype=dtype,
-            low_cpu_mem_usage=True,
-        )
-
-    if USE_LORA_ADAPTER_ID:
-        try:
-            from peft import PeftModel
-            cls.model = PeftModel.from_pretrained(cls.model, USE_LORA_ADAPTER_ID)
-            print(f"[LoRA] Loaded adapter: {USE_LORA_ADAPTER_ID}")
-        except Exception as e:
-            print(f"[WARN] Failed to load LoRA adapter: {e}")
-# app/services/inference.py
-def _build_chat(user_text: str) -> list[dict[str, str]]:
+# ----------------------------------------------------------------
+# 3. 유틸리티 함수
+# ----------------------------------------------------------------
+def _build_chat(title: str, content: str) -> list[dict[str, str]]:
+    user_input = f"제목: {title}\n내용: {content}"
     return [
-        {"role": "tool_list", "content": ""},
         {"role": "system", "content": (
-            "역할: 따뜻하게 위로하는 친구처럼 한국어 코멘트를 쓰는 작가.\n"
-            "규칙:\n"
-            "1) 반드시 개행 없이 한 문장으로만 작성한다.\n"
-            "2) 한글 기준 45~60자로 자연스럽게 맞춘다.\n"
-            "3) 문장 끝은 마침표 하나로 끝내며, ?, !, 따옴표, 이모지, 해시태그 금지.\n"
-            "4) AI, 언어모델, 시스템 등 자기 언급 금지.\n"
-            "5) 입력 내용의 핵심 감정을 반드시 반영해 공감한다.\n"
-            "6) 조언은 강요가 아닌 부드러운 제안 형태로 표현한다.\n"
-            "6) 자기 자신이 아닌 일기의 본인인 타인에 대한 코멘트를 말해야 한다.\n"
-
-            "출력 예시:\n"
-            "- 너 즐거운 하루였구나, 그 기분 오래 유지되도록 스스로를 칭찬해줘.\n"
-            "- 너 오늘 많이 힘들었겠다, 잠시 쉬며 마음을 가볍게 만들어보자.\n"
-            "- 너 정말 억울했을 것 같아, 네 감정을 인정하고 천천히 정리해보자.\n"
+            "너는 사용자의 일기를 읽고 따뜻하게 공감해주는 친구야. "
+            "반드시 한 문장으로 간결하게, 해요체로 부드럽게 위로하거나 칭찬해줘."
         )},
-        {"role": "user", "content": user_text},
+        {"role": "user", "content": user_input},
     ]
 
-
-def _strip_after_stop(text: str) -> str:
+def _clean_text(text: str) -> str:
+    # 특수 토큰 및 불필요한 기호 제거
     for s in STOP_STRINGS:
-        if s and s in text:
+        if s in text:
             text = text.split(s)[0]
-    return text.strip()
+    return text.strip().strip('"').strip("'")
 
-class CommentGenerator:
+# ----------------------------------------------------------------
+# 4. 메인 서비스 클래스
+# ----------------------------------------------------------------
+class InferenceService:
     @classmethod
-    async def generate_comment(cls, text: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+    async def generate_response(cls, title: str, content: str) -> dict:
         _Holder.load()
-        tok, model = _Holder.tok, _Holder.model
+        
+        # 1. 감정 분석 실행
+        emo_scores, dominant_emo = cls._predict_emotion(content)
 
-        # 템플릿 적용 (HyperCLOVAX 계열은 apply_chat_template 권장)
-        chat = _build_chat(text)
-        inputs = tok.apply_chat_template(
-            chat,
-            add_generation_prompt=True,
-            return_tensors="pt",
-            return_dict=True,
-        )
+        # 2. LLM 코멘트 생성
+        comment = cls._generate_comment(title, content)
+
+        return {
+            "comment": comment,
+            "dominantEmotion": dominant_emo,
+            "emotionScores": emo_scores
+        }
+
+    @classmethod
+    def _predict_emotion(cls, text: str):
+        tok, model = _Holder.emo_tok, _Holder.emo_model
+        inputs = tok(text, return_tensors="pt", truncation=True, max_length=128, padding=True)
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+            # Softmax로 확률 변환
+            probs = F.softmax(outputs.logits, dim=-1)[0]
+            
+        # 결과 딕셔너리 생성
+        scores = {ID2LABEL[i]: float(probs[i]) for i in range(len(ID2LABEL))}
+        # 가장 높은 점수의 감정 찾기
+        dominant = max(scores, key=scores.get)
+        
+        return scores, dominant
+
+    @classmethod
+    def _generate_comment(cls, title: str, text: str) -> str:
+        tok, model = _Holder.llm_tok, _Holder.llm_model
+        
+        chat = _build_chat(title, text)
+        inputs = tok.apply_chat_template(chat, add_generation_prompt=True, return_tensors="pt", return_dict=True)
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
         with torch.no_grad():
             out = model.generate(**inputs, **GEN_KW)
             decoded = tok.batch_decode(out, skip_special_tokens=False)[0]
+            
+            # 답변 부분만 추출 (모델마다 다를 수 있음, 일반적인 파싱)
             if "<|im_start|>assistant" in decoded:
                 decoded = decoded.split("<|im_start|>assistant")[-1]
-            decoded = _clean_text(_strip_after_stop(decoded))
-            decoded = _to_one_sentence(decoded)   # ← 최종 한 문장 강제
-            return decoded
+            
+            return _clean_text(decoded)
