@@ -1,11 +1,11 @@
+from datasets import load_dataset
+import torch
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
     Trainer,
     TrainingArguments,
 )
-from datasets import load_dataset
-import torch
 
 # -------------------------------------------------------------
 # 1) 기본 설정
@@ -42,6 +42,7 @@ def preprocess(batch):
         padding="max_length",
         max_length=128,
     )
+    # 문자열 라벨을 숫자로 변환 (label2id 딕셔너리 이용 - 동료 코드 방식 채택)
     enc["labels"] = [label2id[x] for x in batch["label"]]
     return enc
 
@@ -67,12 +68,12 @@ training_args = TrainingArguments(
     learning_rate=2e-5,
     per_device_train_batch_size=32,
     per_device_eval_batch_size=32,
-    num_train_epochs=3,
+    num_train_epochs=3,   # 동료 설정(3 epochs) 유지
     weight_decay=0.01,
     logging_steps=100,
     save_total_limit=2,
     load_best_model_at_end=True,
-    fp16=torch.cuda.is_available(),   # GPU 있으면 자동 mixed precision
+    fp16=torch.cuda.is_available(),
 )
 
 trainer = Trainer(

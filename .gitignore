@@ -1,6 +1,11 @@
-__pycache__/
-*.py[cod]
+venv/
 .venv/
+__pycache__/
 .env
-.idea/
-.vscode/
+*.pt
+*.bin
+*.safetensors
+*.pth
+train/emotion-model/
+checkpoint-*/
+.vs/
