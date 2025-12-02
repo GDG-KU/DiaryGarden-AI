@@ -8,32 +8,22 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 import re
 from fastapi import APIRouter
 
-# ==========================================
-# 1. 데이터 모델 정의
-# ==========================================
 class EmotionResult(BaseModel):
-    emotion: str  # 감정 이름 
-    intensity: float # 감정 강도 
+    emotion: str
+    intensity: float
     model_version: str = "v1.0.0_placeholder"
 
 class InferenceInput(BaseModel):
     text: str
 
-# ==========================================
-# 2. 라우터 및 환경 변수 설정
-# ==========================================
 router = APIRouter(
     prefix="/inference",  
     tags=["Comment Generation", "Emotion Classification"]
 )
 
-# .env 또는 기본값 설정
 COMMENT_MODEL_ID = os.getenv("HF_MODEL_ID", "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-0.5B").strip()
-
-# 감정 모델 경로 (프로젝트 루트 기준)
 EMOTION_MODEL_ID = "train/emotion-model" 
 
-# 생성 옵션
 GEN_KW = dict(
     max_new_tokens=70,
     do_sample=True,
@@ -45,9 +35,6 @@ GEN_KW = dict(
 
 STOP_STRINGS = ["<|endofturn|>", "<|stop|>", "<|im_end|>"]
 
-# ==========================================
-# 3. 유틸리티 함수
-# ==========================================
 def _strip_after_stop(text: str) -> str:
     for s in STOP_STRINGS:
         if s and s in text:
@@ -91,11 +78,7 @@ def _build_chat(user_text: str) -> list[dict[str, str]]:
         {"role": "user", "content": user_text},
     ]
 
-# ==========================================
-# 4. 모델 관리 클래스 (_Holder)
-# ==========================================
 class _Holder:
-    # 모델 변수 초기화
     tok: Optional[AutoTokenizer] = None
     comment_model: Optional[AutoModelForCausalLM] = None 
     emotion_model: Optional[AutoModelForSequenceClassification] = None 
@@ -108,27 +91,22 @@ class _Holder:
 
     @classmethod
     def load(cls):
-        # 1. 이미 두 모델이 모두 로드되었는지 확인
         if cls.tok is not None and cls.comment_model is not None and cls.emotion_model is not None:
             return
 
-        # CPU 최적화
         if cls.device == "cpu":
             try:
                 torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
             except Exception:
                 pass
 
-        # 2. 토크나이저 로드 (KoELECTRA 기준)
         if cls.tok is None:
              cls.tok = AutoTokenizer.from_pretrained("monologg/koelectra-base-v3-discriminator", use_fast=True)
 
-        # 3. 코멘트 생성 모델 로드
         if cls.comment_model is None:
             print(f"Loading comment model: {COMMENT_MODEL_ID}...")
             cls._load_model_for_device(model_id=COMMENT_MODEL_ID, model_type='comment')
 
-        # 4. 감정 분류 모델 로드
         if cls.emotion_model is None:
             print(f"Loading emotion model: {EMOTION_MODEL_ID}...")
             cls._load_model_for_device(model_id=EMOTION_MODEL_ID, model_type='emotion')
@@ -164,14 +142,10 @@ class _Holder:
             print(f"Error loading {model_type} model from {model_id}: {e}")
             raise e
 
-# ==========================================
-# 5. 서비스 클래스 (Generator / Classifier)
-# ==========================================
 class CommentGenerator:
     @classmethod
     async def generate_comment(cls, text: str, metadata: Optional[Dict[str, Any]] = None) -> str:
         _Holder.load()
-        # [수정됨] cls.tok 대신 _Holder.tok 사용
         tok, model = _Holder.tok, _Holder.comment_model
 
         chat = _build_chat(text)
@@ -196,7 +170,6 @@ class EmotionClassifier:
     @classmethod
     async def analyze_emotion(cls, text: str, metadata: Optional[Dict[str, Any]] = None) -> EmotionResult:
         _Holder.load() 
-        # [수정됨] cls.tok 대신 _Holder.tok 사용
         tok, model = _Holder.tok, _Holder.emotion_model
     
         inputs = tok(
@@ -226,9 +199,6 @@ class EmotionClassifier:
             model_version=EMOTION_MODEL_ID.split("/")[-1]
         )
 
-# ==========================================
-# 6. API 엔드포인트
-# ==========================================
 @router.post("/emotion", response_model=EmotionResult, tags=["Emotion Classification"])
 async def analyze_emotion_api(data: InferenceInput):
     """

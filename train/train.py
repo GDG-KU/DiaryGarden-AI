@@ -1,11 +1,11 @@
+from datasets import load_dataset
+import torch
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
     Trainer,
     TrainingArguments,
 )
-from datasets import load_dataset, ClassLabel
-import torch
 
 # -------------------------------------------------------------
 # 1) 기본 설정
@@ -29,14 +29,6 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 # emotion_data.json 위치: 프로젝트 루트 기준
 dataset = load_dataset("json", data_files="emotion_data.json")
 
-
-from datasets import ClassLabel 
-dataset = dataset.cast_column(
-    "label",
-    ClassLabel(names=["joy", "sadness", "anger", "neutral"])
-)
-
-
 # 자동 train/test split (8:2)
 dataset = dataset["train"].train_test_split(test_size=0.2)
 
@@ -50,7 +42,8 @@ def preprocess(batch):
         padding="max_length",
         max_length=128,
     )
-    enc["labels"] = batch["label"]
+    # 문자열 라벨을 숫자로 변환 (label2id 딕셔너리 이용 - 동료 코드 방식 채택)
+    enc["labels"] = [label2id[x] for x in batch["label"]]
     return enc
 
 dataset = dataset.map(preprocess, batched=True)
@@ -70,17 +63,17 @@ model = AutoModelForSequenceClassification.from_pretrained(
 # -------------------------------------------------------------
 training_args = TrainingArguments(
     output_dir="./emotion-model",
-    eval_strategy="epoch",
+    evaluation_strategy="epoch",
     save_strategy="epoch",
-    learning_rate=1.5e-5,
+    learning_rate=2e-5,
     per_device_train_batch_size=32,
     per_device_eval_batch_size=32,
-    num_train_epochs=10,
+    num_train_epochs=3,   # 동료 설정(3 epochs) 유지
     weight_decay=0.01,
     logging_steps=100,
     save_total_limit=2,
     load_best_model_at_end=True,
-    fp16=torch.cuda.is_available(),   # GPU 있으면 자동 mixed precision
+    fp16=torch.cuda.is_available(),
 )
 
 trainer = Trainer(
