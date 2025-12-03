@@ -129,9 +129,9 @@ class InferenceService:
             probs = F.softmax(outputs.logits, dim=-1)[0]
             
         # 결과 딕셔너리 생성
-        scores = {ID2LABEL[i]: float(probs[i]) for i in range(len(ID2LABEL))}
+        scores = {ID2LABEL[i]: float(probs[i]) for i in range(len(probs))}
         # 가장 높은 점수의 감정 찾기
-        dominant = max(scores, key=scores.get)
+        dominant = ID2LABEL[int(torch.argmax(probs))]
         
         return scores, dominant
 
@@ -152,3 +152,4 @@ class InferenceService:
                 decoded = decoded.split("<|im_start|>assistant")[-1]
             
             return _clean_text(decoded)
+        print("DEBUG logits shape:", logits.shape)
