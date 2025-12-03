@@ -125,15 +125,30 @@ class InferenceService:
 
         with torch.no_grad():
             outputs = model(**inputs)
-            # Softmax로 확률 변환
-            probs = F.softmax(outputs.logits, dim=-1)[0]
-            
-        # 결과 딕셔너리 생성
-        scores = {ID2LABEL[i]: float(probs[i]) for i in range(len(probs))}
-        # 가장 높은 점수의 감정 찾기
-        dominant = ID2LABEL[int(torch.argmax(probs))]
-        
-        return scores, dominant
+            logits = outputs.logits
+            probs = F.softmax(logits, dim=-1)[0]
+
+        # --- 여기부터 결과 처리 ---
+        probs = probs.squeeze()
+
+        num_labels = min(len(probs), len(ID2LABEL))
+
+        # 차원 mismatch 경고
+        if len(probs) != len(ID2LABEL):
+            print(f"[WARN] logits/probs size({len(probs)}) != ID2LABEL size({len(ID2LABEL)})")
+
+        # 가능한 범위까지만 매핑
+        scores = {ID2LABEL[i]: float(probs[i]) for i in range(num_labels)}
+
+        # 주요 감정
+        dominant_idx = int(torch.argmax(probs[:num_labels]))
+        dominant_emo = ID2LABEL[dominant_idx]
+
+        # 디버그
+        print("DEBUG logits shape:", logits.shape)
+
+        return scores, dominant_emo
+
 
     @classmethod
     def _generate_comment(cls, title: str, text: str) -> str:
@@ -152,4 +167,3 @@ class InferenceService:
                 decoded = decoded.split("<|im_start|>assistant")[-1]
             
             return _clean_text(decoded)
-        print("DEBUG logits shape:", logits.shape)
