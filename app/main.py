@@ -27,7 +27,7 @@ class InferenceResponse(BaseModel):
     dominantEmotion: str = Field(..., description="지배적인 감정 (joy, sadness, anger, neutral)")
     emotionScores: Dict[str, float] = Field(..., description="감정별 점수")
 
-@app.get("/health")
+@app.get("/health", summary="헬스체크")
 def health():
     return {"ok": True}
 
