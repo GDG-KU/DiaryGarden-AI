@@ -33,12 +33,9 @@ def health():
 
 @app.post("/api/v1/inference", response_model=InferenceResponse)
 async def inference(req: InferenceRequest):
-    # 서비스 로직 호출
     from app.services.inference import InferenceService
     
     result = await InferenceService.generate_response(req.title, req.text)
-    
-    return JSONResponse(
-        content=result,
-        media_type="application/json; charset=utf-8"
-    )
+
+    # 여기! JSONResponse → Pydantic 모델로 변환해서 반환
+    return InferenceResponse(**result)
