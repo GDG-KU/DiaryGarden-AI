@@ -4,3 +4,16 @@ __pycache__/
 .env
 .idea/
 .vscode/
+
+emotion-model/
+*.pt
+*.bin
+*.ckpt
+*.model
+*.pkl
+*.zip
+*.npy
+*.mp4
+*.wav
+data/
+models/

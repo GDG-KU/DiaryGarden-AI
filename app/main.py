@@ -1,12 +1,12 @@
-
+# app/main.py
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 
-app = FastAPI(title="DiaryGarden-AI", version="0.1.0")
+app = FastAPI(title="DiaryGarden-AI", version="0.2.0")
 
-# 모든 JSON 응답에 charset=utf-8 명시 (PowerShell 출력 깨짐 완화)
+# 한글 깨짐 방지 미들웨어
 @app.middleware("http")
 async def ensure_utf8_content_type(request, call_next):
     response = await call_next(request)
@@ -14,27 +14,28 @@ async def ensure_utf8_content_type(request, call_next):
         response.headers["content-type"] = "application/json; charset=utf-8"
     return response
 
+# [변경 1] 요청 스키마: title 추가
 class InferenceRequest(BaseModel):
-    text: str = Field(..., description="코멘트를 생성할 입력 텍스트(일기 등)")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="선택 메타데이터")
+    title: str = Field(..., description="일기 제목")
+    text: str = Field(..., description="일기 내용")
+    # metadata는 필요 없다면 제거해도 되지만, 확장을 위해 유지
+    metadata: Optional[Dict] = Field(None)
 
+# [변경 2] 응답 스키마: 구조 변경
 class InferenceResponse(BaseModel):
-    comment: str = Field(..., description="생성된 코멘트 한 단락")
+    comment: str = Field(..., description="AI의 공감 코멘트")
+    dominantEmotion: str = Field(..., description="지배적인 감정 (joy, sadness, anger, neutral)")
+    emotionScores: Dict[str, float] = Field(..., description="감정별 점수")
 
 @app.get("/health", summary="헬스체크")
 def health():
     return {"ok": True}
 
-@app.post(
-    "/api/v1/inference",
-    response_model=InferenceResponse,
-    summary="코멘트 생성",
-    description="입력 텍스트를 바탕으로 한국어 공감 코멘트를 한 단락 생성합니다.",
-)
+@app.post("/api/v1/inference", response_model=InferenceResponse)
 async def inference(req: InferenceRequest):
-    from app.services.inference import CommentGenerator
-    comment = await CommentGenerator.generate_comment(req.text, req.metadata)
-    return JSONResponse(
-        content=InferenceResponse(comment=comment).model_dump(),
-        media_type="application/json; charset=utf-8",
-    )
+    from app.services.inference import InferenceService
+    
+    result = await InferenceService.generate_response(req.title, req.text)
+
+    # 여기! JSONResponse → Pydantic 모델로 변환해서 반환
+    return InferenceResponse(**result)
