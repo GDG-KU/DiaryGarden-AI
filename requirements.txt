@@ -1,9 +1,18 @@
+# Web Framework
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 pydantic==2.8.2
 httpx==0.27.0
+
+# ML/DL
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.24.0
+safetensors>=0.4.0
+sentencepiece  # 토크나이저용
+
+# Testing (배포 시 제외 가능)
 pytest==8.3.2
-torch
-transformers
-accelerate
-safetensors
+
+# Training (로컬 학습용)
+datasets>=2.14.0

@@ -17,3 +17,5 @@ emotion-model/
 *.wav
 data/
 models/
+
+deploy/deploy_vertex_ai.sh
