@@ -23,7 +23,6 @@ class InferenceRequest(BaseModel):
 
 # [변경 2] 응답 스키마: 구조 변경
 class InferenceResponse(BaseModel):
-    comment: str = Field(..., description="AI의 공감 코멘트")
     dominantEmotion: str = Field(..., description="지배적인 감정 (happy, sad, angry, calm)")
     emotionScores: Dict[str, float] = Field(..., description="감정별 점수")
 
