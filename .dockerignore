@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Tests
+test_*.py
+pytest.ini
+.pytest_cache/
+
+# Training data (모델만 필요, 데이터는 제외)
+train/emotion_data.json
+train/train.py
+
+# Local development
+.env
+*.log
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# MacOS
+.DS_Store

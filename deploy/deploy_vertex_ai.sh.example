@@ -1,0 +1,123 @@
+#!/bin/bash
+# =============================================================
+# Vertex AI 배포 스크립트
+# =============================================================
+
+set -e
+
+# -------------------------------------------------------------
+# 1. 설정 (반드시 수정하세요!)
+# -------------------------------------------------------------
+PROJECT_ID="your-gcp-project-id"        # GCP 프로젝트 ID
+REGION="asia-northeast3"                 # 서울 리전
+REPOSITORY="diary-garden-ai"             # Artifact Registry 저장소 이름
+IMAGE_NAME="diary-garden-inference"      # Docker 이미지 이름
+IMAGE_TAG="v1.0.0"
+
+# Vertex AI 설정 (가장 저렴한 GPU + Cold Start)
+MODEL_NAME="diary-garden-model"
+ENDPOINT_NAME="diary-garden-endpoint"
+MACHINE_TYPE="n1-standard-2"             # CPU 2코어, 7.5GB RAM
+ACCELERATOR_TYPE="NVIDIA_TESLA_T4"       # 가장 저렴한 GPU (~$0.35/hr)
+ACCELERATOR_COUNT=1
+# min-replica-count=0 으로 Cold Start 허용 (사용 안 할 때 비용 0원)
+
+# 전체 이미지 경로
+IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+# -------------------------------------------------------------
+# 2. Artifact Registry 저장소 생성 (최초 1회)
+# -------------------------------------------------------------
+echo "📦 Creating Artifact Registry repository..."
+gcloud artifacts repositories create ${REPOSITORY} \
+    --repository-format=docker \
+    --location=${REGION} \
+    --description="DiaryGarden AI models" \
+    --project=${PROJECT_ID} || echo "Repository already exists"
+
+# -------------------------------------------------------------
+# 3. Docker 인증 설정
+# -------------------------------------------------------------
+echo "🔐 Configuring Docker authentication..."
+gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+# -------------------------------------------------------------
+# 4. Docker 이미지 빌드 및 푸시
+# -------------------------------------------------------------
+echo "🐳 Building Docker image..."
+docker build -t ${IMAGE_URI} .
+
+echo "📤 Pushing image to Artifact Registry..."
+docker push ${IMAGE_URI}
+
+# -------------------------------------------------------------
+# 5. Vertex AI 모델 등록
+# -------------------------------------------------------------
+echo "📝 Uploading model to Vertex AI..."
+gcloud ai models upload \
+    --region=${REGION} \
+    --display-name=${MODEL_NAME} \
+    --container-image-uri=${IMAGE_URI} \
+    --container-ports=8080 \
+    --container-health-route=/health \
+    --container-predict-route=/api/v1/inference \
+    --project=${PROJECT_ID}
+
+# 모델 ID 가져오기
+MODEL_ID=$(gcloud ai models list \
+    --region=${REGION} \
+    --filter="displayName=${MODEL_NAME}" \
+    --format="value(name)" \
+    --project=${PROJECT_ID} | head -n1)
+
+echo "✅ Model uploaded: ${MODEL_ID}"
+
+# -------------------------------------------------------------
+# 6. Endpoint 생성 (최초 1회)
+# -------------------------------------------------------------
+echo "🌐 Creating endpoint..."
+gcloud ai endpoints create \
+    --region=${REGION} \
+    --display-name=${ENDPOINT_NAME} \
+    --project=${PROJECT_ID} || echo "Endpoint might already exist"
+
+# Endpoint ID 가져오기
+ENDPOINT_ID=$(gcloud ai endpoints list \
+    --region=${REGION} \
+    --filter="displayName=${ENDPOINT_NAME}" \
+    --format="value(name)" \
+    --project=${PROJECT_ID} | head -n1)
+
+echo "✅ Endpoint: ${ENDPOINT_ID}"
+
+# -------------------------------------------------------------
+# 7. 모델을 Endpoint에 배포
+# -------------------------------------------------------------
+echo "🚀 Deploying model to endpoint (Cold Start 허용)..."
+gcloud ai endpoints deploy-model ${ENDPOINT_ID} \
+    --region=${REGION} \
+    --model=${MODEL_ID} \
+    --display-name="${MODEL_NAME}-deployed" \
+    --machine-type=${MACHINE_TYPE} \
+    --accelerator=type=${ACCELERATOR_TYPE},count=${ACCELERATOR_COUNT} \
+    --min-replica-count=0 \
+    --max-replica-count=2 \
+    --project=${PROJECT_ID}
+
+# -------------------------------------------------------------
+# 8. 완료
+# -------------------------------------------------------------
+echo ""
+echo "=============================================="
+echo "🎉 배포 완료!"
+echo "=============================================="
+echo ""
+echo "Endpoint URL:"
+echo "https://${REGION}-aiplatform.googleapis.com/v1/${ENDPOINT_ID}:predict"
+echo ""
+echo "테스트 방법:"
+echo 'curl -X POST \\'
+echo "  -H \"Authorization: Bearer \$(gcloud auth print-access-token)\" \\"
+echo "  -H \"Content-Type: application/json\" \\"
+echo "  https://${REGION}-aiplatform.googleapis.com/v1/${ENDPOINT_ID}:predict \\"
+echo '  -d '"'"'{"instances": [{"title": "오늘의 일기", "text": "오늘은 정말 기분이 좋았다!"}]}'"'"
