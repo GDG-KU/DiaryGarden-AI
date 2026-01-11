@@ -15,10 +15,10 @@ MODEL_NAME = "monologg/koelectra-base-v3-discriminator"
 
 # 4개 감정 라벨
 label2id = {
-    "joy": 0,
-    "sadness": 1,
-    "anger": 2,
-    "neutral": 3,
+    "happy": 0,
+    "sad": 1,
+    "angry": 2,
+    "calm": 3,
 }
 id2label = {v: k for k, v in label2id.items()}
 
@@ -77,8 +77,8 @@ training_args = TrainingArguments(
     eval_strategy="epoch",  
     save_strategy="epoch",
     learning_rate=2e-5,
-    per_device_train_batch_size=32,
-    per_device_eval_batch_size=32,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
     num_train_epochs=5,
     weight_decay=0.01,
     logging_steps=10,
